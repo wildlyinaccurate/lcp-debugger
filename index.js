@@ -1,25 +1,27 @@
 import { chromium, devices } from "playwright";
+import { initializeObservers } from "./browser/observers.js";
 
-if (process.argv.length < 3) {
-  logError("Usage: node index.js <url>");
-  process.exit(1);
-}
+const DEFAULT_OPTIONS = {
+  device: "Desktop Chrome",
+};
 
-const url = (() => {
-  try {
-    return new URL(process.argv[2]);
-  } catch (e) {
-    logError("Invalid URL");
-    process.exit(1);
+export default async function getLcpData(url, options = {}) {
+  options = { ...DEFAULT_OPTIONS, ...options };
+
+  function log(msg) {
+    if (options.verbose) {
+      process.stdout.write(`${msg}\n`);
+    }
   }
-})();
 
-// const device = devices["Moto G4"];
-const device = devices["Desktop Chrome"];
-const CPU_IDLE_TIME = 500;
-const OBSERVER_COLLECTION_DELAY = 2000;
+  function logError(msg) {
+    process.stderr.write(`${msg}\n`);
+  }
 
-(async () => {
+  const device = devices[options.device];
+  const CPU_IDLE_TIME = 500;
+  const OBSERVER_COLLECTION_DELAY = 2000;
+
   log("Launching browser");
   const browser = await chromium.launch({
     headless: false,
@@ -33,26 +35,7 @@ const OBSERVER_COLLECTION_DELAY = 2000;
 
   log(`Opening ${url}`);
   await page.goto(url.toString());
-  await page.evaluate(() => {
-    window.__LCP_DEBUGGER = {
-      lcpEntries: [],
-      longTaskEntries: [],
-    };
-
-    new PerformanceObserver((list) =>
-      window.__LCP_DEBUGGER.lcpEntries.push(...list.getEntries())
-    ).observe({
-      type: "largest-contentful-paint",
-      buffered: true,
-    });
-
-    new PerformanceObserver((list) =>
-      window.__LCP_DEBUGGER.longTaskEntries.push(...list.getEntries())
-    ).observe({
-      type: "longtask",
-      buffered: true,
-    });
-  });
+  await page.evaluate(initializeObservers);
 
   // Allow the page to finish loading
   try {
@@ -170,14 +153,12 @@ const OBSERVER_COLLECTION_DELAY = 2000;
     .forEach(logRequest);
 
   log("Cleaning up");
-  // await context.close();
-  // await browser.close();
-})();
+  await context.close();
+  await browser.close();
 
-function log(msg) {
-  process.stdout.write(`${msg}\n`);
-}
-
-function logError(msg) {
-  process.stderr.write(`${msg}\n`);
+  return {
+    lcp: {
+      entry: lastLcpEntry,
+    },
+  };
 }

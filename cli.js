@@ -4,20 +4,19 @@ import log from "npmlog";
 import getVitalsData from "./index.js";
 
 const argv = minimist(process.argv.slice(2));
-
-if (!argv._.length || !URL.canParse(argv._[0])) {
-  log.stdout(usage());
-  process.exit(1);
-}
-
-const url = argv._[0];
-
 const DEFAULT_OPTIONS = {
   device: "Desktop Chrome",
   headless: true,
   output: "json",
   outputPath: "stdout",
 };
+
+if (argv.help || !argv._.length || !URL.canParse(argv._[0])) {
+  process.stdout.write(usage());
+  process.exit(1);
+}
+
+const url = argv._[0];
 
 const kebabToCamel = (str) => str.replace(/-./g, (x) => x[1].toUpperCase());
 const options = {
@@ -47,7 +46,7 @@ const data = await getVitalsData(url, options);
 process.stdout.write(JSON.stringify(data, null, 4));
 
 function usage() {
-  return `lcp-debugger <url> <options>
+  return `cwv-debugger <url> <options>
 
   Logging options:
     --verbose   Display verbose logging
@@ -61,5 +60,9 @@ function usage() {
     --device            Use a specific Playwright device configuration (overrides --preset)
     --[no-]headless     Run the browser in headless mode [default: ${DEFAULT_OPTIONS.headless}]
     --headed            Run the browser in headed mode (overrides --headless)
+
+  Examples:
+    cwv-debugger <url> --headed --verbose      Run the tests for <url> in a visible browser window with extra logging
+    cwv-debugger <url> --device 'Moto G4'      Run the tests for <url> with the Moto G4 device configuration
 `;
 }

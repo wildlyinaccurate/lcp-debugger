@@ -7,7 +7,11 @@ A simple command line tool for debugging and optimizing [Core Web Vitals](https:
 ### Usage
 
 ```
-node index.js <URL>
+npx cwv-debugger <URL>
 ```
 
-> Remember to run `npm install` first.
+To see example commands and all available options, run:
+
+```
+npx cwv-debugger --help
+```

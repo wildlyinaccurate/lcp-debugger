@@ -1,164 +1,143 @@
+import log from "npmlog";
 import { chromium, devices } from "playwright";
-import { initializeObservers } from "./browser/observers.js";
+import { initializeObservers } from "./browser/observer.js";
+import { highlightArea } from "./browser/highlight.js";
 
-const DEFAULT_OPTIONS = {
-  device: "Desktop Chrome",
-};
+/**
+ * @param {string} url
+ * @param {Object} options
+ * @param {string} options.device
+ * @param {boolean=} options.headless
+ * @returns {Object<string, Object>}
+ */
+export default async function getVitalsData(url, options = {}) {
+  const CPU_IDLE_TIME = 1000;
+  const OBSERVER_COLLECTION_DELAY = 500;
 
-export default async function getLcpData(url, options = {}) {
-  options = { ...DEFAULT_OPTIONS, ...options };
-
-  function log(msg) {
-    if (options.verbose) {
-      process.stdout.write(`${msg}\n`);
-    }
-  }
-
-  function logError(msg) {
-    process.stderr.write(`${msg}\n`);
-  }
-
-  const device = devices[options.device];
-  const CPU_IDLE_TIME = 500;
-  const OBSERVER_COLLECTION_DELAY = 2000;
-
-  log("Launching browser");
+  log.verbose("Launching browser");
   const browser = await chromium.launch({
-    headless: false,
+    headless: options.headless,
   });
-  const context = await browser.newContext(device);
+  const context = await browser.newContext(devices[options.device]);
   const page = await context.newPage();
 
   // Keep track of requests
   const requests = [];
   page.on("request", (request) => requests.push(request));
 
-  log(`Opening ${url}`);
+  log.verbose(`Opening ${url}`);
   await page.goto(url.toString());
-  await page.evaluate(initializeObservers);
+
+  log.verbose("Attaching observers");
+  const observer = await initializeObservers(page);
 
   // Allow the page to finish loading
   try {
-    log("Waiting for network idle");
+    log.verbose("Waiting for network idle");
     await page.waitForLoadState("networkidle");
   } catch (e) {
-    logError("Timed out while waiting for network idle. Continuing anyway...");
+    log.error("Timed out while waiting for network idle. Continuing anyway...");
   }
 
-  const getLongTaskEntries = async () =>
-    page.evaluate(() => __LCP_DEBUGGER.longTaskEntries);
+  log.enableProgress();
+  log.verbose("Waiting for CPU idle");
+  let now = await page.evaluate(() => performance.now());
+  let lastTaskTime = 0;
+  observer.on("longtask", (entry) => (lastTaskTime = entry.startTime + entry.duration));
 
-  log("Waiting for CPU idle");
-  let longTaskEntries = await getLongTaskEntries();
-  await page.waitForTimeout(CPU_IDLE_TIME);
-  let newLongTaskEntries = await getLongTaskEntries();
-  while (newLongTaskEntries.length > longTaskEntries.length) {
-    log("...");
-    longTaskEntries = newLongTaskEntries;
-    await page.waitForTimeout(CPU_IDLE_TIME);
-    newLongTaskEntries = await getLongTaskEntries();
+  while (now - CPU_IDLE_TIME < lastTaskTime) {
+    log.gauge.pulse();
+    await page.waitForTimeout(100);
+    now = await page.evaluate(() => performance.now());
   }
+  log.disableProgress();
 
   // Give the PerformanceObserver some time to collect entries
   await page.waitForTimeout(OBSERVER_COLLECTION_DELAY);
 
-  const lcpEntries = await page.evaluate(() => __LCP_DEBUGGER.lcpEntries);
-  const lastLcpEntry = lcpEntries[lcpEntries.length - 1];
-  log(`Found ${lcpEntries.length} LCP entries`);
-  log(`Found ${longTaskEntries.length} long task entries`);
+  const lcpEntries = observer.getEntries("largest-contentful-paint");
+  const lcpEntry = lcpEntries[lcpEntries.length - 1];
+  log.verbose(`Found ${lcpEntries.length} LCP entries`);
 
-  if (!lastLcpEntry) {
-    logError("No LCP element found");
+  if (!lcpEntry) {
+    log.error("No LCP element found");
     process.exit(0);
   }
 
-  log("Highlighting LCP element");
-  await page.evaluate(() => {
-    const lcpEntries = window.__LCP_DEBUGGER.lcpEntries;
-    const lastLcpEntry = lcpEntries[lcpEntries.length - 1];
-    const lcpRect = lastLcpEntry.element.getBoundingClientRect();
+  log.verbose("Highlighting LCP element");
+  await highlightArea(page, lcpEntry.rect);
 
-    const shadowDiv = document.createElement("div");
-    shadowDiv.style.boxShadow = "0 0 0 99999px rgba(0, 0, 0, 0.5)";
-    shadowDiv.style.height = `${lcpRect.height}px`;
-    shadowDiv.style.left = `${lcpRect.left}px`;
-    shadowDiv.style.position = "absolute";
-    shadowDiv.style.top = `${lcpRect.top}px`;
-    shadowDiv.style.width = `${lcpRect.width}px`;
-    shadowDiv.style.zIndex = "999999";
-
-    const innerShadowDiv = document.createElement("div");
-    innerShadowDiv.style.border = "3px solid red";
-    innerShadowDiv.style.height = "100%";
-    innerShadowDiv.style.width = "100%";
-
-    shadowDiv.appendChild(innerShadowDiv);
-    document.body.appendChild(shadowDiv);
-    document.body.style.overflow = "hidden";
-  });
-
-  log("Taking screenshot");
+  log.verbose("Taking screenshot");
   await page.screenshot({ path: "screenshot.png" });
 
-  const navEntry = await page.evaluate(
-    () => performance.getEntriesByType("navigation")[0]
-  );
+  const navEntry = await page.evaluate(() => performance.getEntriesByType("navigation")[0]);
   const ttfb = navEntry.responseStart;
 
-  log(`TTFB was at ${Math.round(ttfb)} ms`);
-  log(`LCP was at ${Math.round(lastLcpEntry.startTime)} ms`);
-  log(`LCP URL was ${lastLcpEntry.url}`);
+  log.verbose(`TTFB was at ${Math.round(ttfb)} ms`);
+  log.verbose(`LCP was at ${Math.round(lcpEntry.startTime)} ms`);
+  log.verbose(`LCP URL was ${lcpEntry.url}`);
 
   const lcpRequest = await page.evaluate(
     (lcpEntry) => performance.getEntriesByName(lcpEntry.url)[0],
-    lastLcpEntry
+    lcpEntry,
   );
+
+  const lcpSubParts = {
+    ttfb,
+    loadDelay: undefined,
+    loadTime: undefined,
+    renderDelay: undefined,
+  };
 
   if (lcpRequest) {
     const lcpRequestStart = lcpRequest.requestStart;
     const lcpResponseEnd = lcpRequest.responseEnd;
-    const lcpLoadDelay = lcpRequestStart - ttfb;
-    const lcpLoadTime = lcpResponseEnd - lcpRequestStart;
-    const lcpRenderDelay = lastLcpEntry.startTime - lcpResponseEnd;
+    lcpSubParts.loadDelay = lcpRequestStart - ttfb;
+    lcpSubParts.loadTime = lcpResponseEnd - lcpRequestStart;
+    lcpSubParts.renderRelay = lcpEntry.startTime - lcpResponseEnd;
 
-    log("LCP sub-parts:");
-    log(`  Load delay: ${Math.round(lcpLoadDelay)} ms`);
-    log(`  Load time: ${Math.round(lcpLoadTime)} ms`);
-    log(`  Render delay: ${Math.round(lcpRenderDelay)} ms`);
-    log(`  requestStart: ${Math.round(lcpRequestStart)} ms`);
-    log(`  responseEnd: ${Math.round(lcpResponseEnd)} ms`);
+    log.verbose("LCP sub-parts:");
+    log.verbose(`  Load delay: ${Math.round(lcpSubParts.loadDelay)} ms`);
+    log.verbose(`  Load time: ${Math.round(lcpSubParts.loadTime)} ms`);
+    log.verbose(`  Render delay: ${Math.round(lcpSubParts.renderRelay)} ms`);
+    log.verbose(`  requestStart: ${Math.round(lcpRequestStart)} ms`);
+    log.verbose(`  responseEnd: ${Math.round(lcpResponseEnd)} ms`);
   }
 
   const mainFrameRequests = requests.filter(
-    (request) => request.frame() === page.mainFrame() && request.url() !== url
+    (request) => request.frame() === page.mainFrame() && request.url() !== url,
   );
 
-  const logRequest = (request) =>
-    log(
-      `${request.timing().responseStart} - ${
-        request.timing().responseEnd
-      } ms - ${request.url()}`
-    );
+  const lcpBlockingResources = mainFrameRequests.filter(
+    (request) =>
+      request.url() !== lcpEntry.url && request.timing().responseEnd < lcpEntries[0].startTime,
+  );
 
-  // log("");
-  // log("=====================");
-  // log("All requests:");
-  // mainFrameRequests.forEach(logRequest);
+  log.verbose(`Found ${mainFrameRequests.length} HTTP requests in the main frame`);
+  log.verbose(`Found ${lcpBlockingResources.length} HTTP requests that potentially blocked LCP`);
 
-  log("");
-  log("=====================");
-  log("Requests that potentially blocked LCP:");
-  mainFrameRequests
-    .filter((request) => request.timing().responseEnd < lcpEntries[0].startTime)
-    .forEach(logRequest);
-
-  log("Cleaning up");
+  log.verbose("Cleaning up");
   await context.close();
   await browser.close();
 
   return {
     lcp: {
-      entry: lastLcpEntry,
+      time: lcpEntry.startTime,
+      startTime: lcpEntry.startTime,
+      renderTime: lcpEntry.renderTime,
+      loadTime: lcpEntry.loadTime,
+      url: lcpEntry.url,
+      name: lcpEntry.name,
+      fetchPriority: lcpEntry.fetchPriority,
+      preloaded: lcpEntry.preloaded,
+      rect: lcpEntry.rect,
+      subParts: lcpSubParts,
+      optimizations: {
+        blockingResources: lcpBlockingResources.map((request) => ({
+          url: request.url(),
+          timing: request.timing(),
+        })),
+      },
     },
   };
 }

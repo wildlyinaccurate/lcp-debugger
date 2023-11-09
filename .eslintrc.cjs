@@ -2,14 +2,16 @@ module.exports = {
   env: {
     es2021: true,
     node: true,
+    browser: true,
   },
   extends: [
     "eslint:recommended",
-    "plugin:import/typescript",
+    "plugin:import/recommended",
     "plugin:prettier/recommended",
   ],
   plugins: ["import", "prettier"],
   rules: {
+    "prettier/prettier": "error",
     "import/order": [
       "error",
       {
@@ -20,7 +22,6 @@ module.exports = {
   overrides: [
     {
       env: {
-        browser: true,
         node: true,
       },
       files: [".eslintrc.{js,cjs}"],

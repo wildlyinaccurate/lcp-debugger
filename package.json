@@ -1,6 +1,6 @@
 {
-  "name": "lcp-debugger",
-  "version": "1.0.0",
+  "name": "cwv-debugger",
+  "version": "0.0.1",
   "description": "",
   "type": "module",
   "main": "index.js",
@@ -13,6 +13,8 @@
   "license": "ISC",
   "dependencies": {
     "minimist": "^1.2.8",
+    "nanoid": "^5.0.3",
+    "npmlog": "^7.0.1",
     "playwright": "^1.39.0"
   },
   "devDependencies": {
@@ -21,5 +23,8 @@
     "eslint-plugin-import": "^2.29.0",
     "eslint-plugin-prettier": "^5.0.1",
     "prettier": "^3.0.3"
+  },
+  "prettier": {
+    "printWidth": 100
   }
 }

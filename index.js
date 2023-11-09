@@ -1,7 +1,7 @@
 import log from "npmlog";
 import { chromium, devices } from "playwright";
-import { initializeObservers } from "./browser/observer.js";
 import { highlightArea } from "./browser/highlight.js";
+import { initializeObservers } from "./browser/observer.js";
 
 /**
  * @param {string} url

@@ -2,12 +2,15 @@
 import minimist from "minimist";
 import log from "npmlog";
 import getVitalsData from "./index.js";
+import { jsonReporter } from "./reporters/json.js";
+import { textReporter } from "./reporters/text.js";
 
 const argv = minimist(process.argv.slice(2));
+const OUTPUT_TYPES = ["json", "text"];
 const DEFAULT_OPTIONS = {
   device: "Desktop Chrome",
   headless: true,
-  output: "json",
+  output: "text",
   outputPath: "stdout",
 };
 
@@ -28,7 +31,7 @@ if (options.headed) {
   options.headless = false;
 }
 
-if (options.output !== "json") {
+if (!OUTPUT_TYPES.includes(options.output)) {
   log.error(`Unknown output type "${options.output}".`);
   process.exit(1);
 }
@@ -43,7 +46,12 @@ if (options.verbose) {
 log.info(`Testing ${url}`);
 
 const data = await getVitalsData(url, options);
-process.stdout.write(JSON.stringify(data, null, 4));
+
+if (options.output === "json") {
+  jsonReporter(data);
+} else {
+  textReporter(data);
+}
 
 function usage() {
   return `cwv-debugger <url> <options>
@@ -52,8 +60,12 @@ function usage() {
     --verbose   Display verbose logging
 
   Output:
-    --output        Output format ["json"] [default: "${DEFAULT_OPTIONS.output}"]
-    --output-path   The path to write the output to. Use "stdout" to write to stdout. [default: "${DEFAULT_OPTIONS.outputPath}"]
+    --output        Output format ${JSON.stringify(OUTPUT_TYPES)} [default: "${
+      DEFAULT_OPTIONS.output
+    }"]
+    --output-path   The path to write the output to. Use "stdout" to write to stdout. [default: "${
+      DEFAULT_OPTIONS.outputPath
+    }"]
 
   Configuration:
     --preset            Use one of the preset configurations ["desktop" | "mobile"] [default: "desktop"]

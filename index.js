@@ -14,7 +14,7 @@ export default async function getVitalsData(url, options = {}) {
   const CPU_IDLE_TIME = 1000;
   const OBSERVER_COLLECTION_DELAY = 500;
 
-  log.verbose("Launching browser");
+  log.verbose(`Launching browser with '${options.device}' device`);
   const browser = await chromium.launch({
     headless: options.headless,
   });
@@ -68,7 +68,7 @@ export default async function getVitalsData(url, options = {}) {
   await highlightArea(page, lcpEntry.rect);
 
   log.verbose("Taking screenshot");
-  await page.screenshot({ path: "screenshot.png" });
+  await page.screenshot({ path: "screenshot.png", fullPage: true });
 
   const navEntry = await page.evaluate(() => performance.getEntriesByType("navigation")[0]);
   const ttfb = navEntry.responseStart;
@@ -108,10 +108,14 @@ export default async function getVitalsData(url, options = {}) {
     (request) => request.frame() === page.mainFrame() && request.url() !== url,
   );
 
-  const lcpBlockingResources = mainFrameRequests.filter(
-    (request) =>
-      request.url() !== lcpEntry.url && request.timing().responseEnd < lcpEntries[0].startTime,
-  );
+  const lcpBlockingResources = mainFrameRequests.filter((request) => {
+    const timing = request.timing();
+    const requestIsNotLCP = request.url() !== lcpEntry.url;
+    const requestStartedBeforeLCP = timing.responseEnd < lcpEntries[0].startTime;
+    const requestWasNotCached = timing.responseEnd - timing.requestStart > 0;
+
+    return requestIsNotLCP && requestStartedBeforeLCP && requestWasNotCached;
+  });
 
   log.verbose(`Found ${mainFrameRequests.length} HTTP requests in the main frame`);
   log.verbose(`Found ${lcpBlockingResources.length} HTTP requests that potentially blocked LCP`);
@@ -121,6 +125,10 @@ export default async function getVitalsData(url, options = {}) {
   await browser.close();
 
   return {
+    ttfb: {
+      time: ttfb,
+      startTime: ttfb,
+    },
     lcp: {
       time: lcpEntry.startTime,
       startTime: lcpEntry.startTime,
@@ -133,11 +141,17 @@ export default async function getVitalsData(url, options = {}) {
       rect: lcpEntry.rect,
       subParts: lcpSubParts,
       optimizations: {
-        blockingResources: lcpBlockingResources.map((request) => ({
-          url: request.url(),
-          timing: request.timing(),
-        })),
+        blockingResources: lcpBlockingResources.map((request) => {
+          const timing = request.timing();
+
+          return {
+            url: request.url(),
+            timing,
+            savings: Math.round(timing.responseEnd - timing.requestStart),
+          };
+        }),
       },
     },
+    requests: mainFrameRequests,
   };
 }
